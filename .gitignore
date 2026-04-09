@@ -3,6 +3,9 @@
 .env.cloud
 *.pem
 
+# Claude Code internal
+.claude/
+
 # Python
 venv/
 __pycache__/
