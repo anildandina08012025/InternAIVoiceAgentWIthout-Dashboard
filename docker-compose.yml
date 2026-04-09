@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+
+  # ─── Redis (required by LiveKit SIP) ────────────────────────────────────
+  redis:
+    image: redis:alpine
+    container_name: livekit-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data          # persists trunk data across restarts
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+
+  # ─── LiveKit WebRTC Server ───────────────────────────────────────────────
+  livekit-server:
+    image: livekit/livekit-server:latest
+    container_name: livekit-server
+    ports:
+      - "7880:7880"             # WebSocket / HTTP API
+      - "7881:7881"             # TCP  (WebRTC)
+      - "50000-50200:50000-50200/udp"  # UDP  (WebRTC media)
+    command: --config /etc/livekit.yaml
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  # ─── LiveKit SIP Bridge (connects VoBiz ↔ LiveKit) ──────────────────────
+  livekit-sip:
+    image: livekit/sip:latest
+    container_name: livekit-sip
+    ports:
+      - "5060:5060/udp"         # SIP signalling (UDP)
+      - "5060:5060/tcp"         # SIP signalling (TCP)
+      - "10000-10100:10000-10100/udp"  # RTP media (supports ~50 concurrent calls)
+    volumes:
+      - ./sip.yaml:/etc/sip.yaml:ro
+    command: --config /etc/sip.yaml
+    depends_on:
+      - livekit-server
+      - redis
+    restart: unless-stopped
+
+volumes:
+  redis-data:                   # named volume — survives docker-compose down

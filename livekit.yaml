@@ -1,0 +1,22 @@
+# LiveKit Server Configuration
+# Docs: https://docs.livekit.io/home/self-hosting/deployment/
+
+port: 7880
+
+rtc:
+  tcp_port: 7881
+  port_range_start: 50000
+  port_range_end: 50200
+  # ⚠️  IMPORTANT: If VoBiz/agents connect from outside your machine,
+  #     uncomment and set your server's public IP:
+  # nat_addr: "YOUR_PUBLIC_IP"
+
+keys:
+  # These are dev keys — change them in production!
+  devkey: secret
+
+redis:
+  address: redis:6379
+
+logging:
+  level: info

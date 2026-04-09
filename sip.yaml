@@ -1,0 +1,26 @@
+# LiveKit SIP Server Configuration
+# This bridges VoBiz SIP trunk <-> LiveKit rooms
+
+api_key: devkey
+api_secret: secret
+
+# Points to the LiveKit server container (use service name inside docker-compose)
+ws_url: ws://livekit-server:7880
+
+# SIP listen port (must match docker-compose port mapping)
+sip_port: 5060
+
+# RTP media port range (must match docker-compose port mapping)
+rtp_port_range_from: 10000
+rtp_port_range_to: 10100
+
+# ⚠️  REQUIRED: Your machine's public IP — VoBiz sends SIP/RTP back to this address.
+# Find it by running in terminal:  curl ifconfig.me
+# Then replace YOUR_PUBLIC_IP below with the result (e.g. 103.45.67.89)
+sip_domain: "157.50.122.11"
+
+redis:
+  address: redis:6379
+
+logging:
+  level: info
