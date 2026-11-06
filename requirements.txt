@@ -1,9 +1,9 @@
 livekit-agents>=1.5.0
 livekit-api>=0.6.0
-livekit-plugins-groq>=0.3.0
 livekit-plugins-openai>=0.6.0
 livekit-plugins-silero>=0.6.0
 livekit-plugins-sarvam>=1.5.0
+livekit-plugins-google==1.8.10
 python-dotenv>=1.0.0
 flask>=3.0.0
 langdetect>=1.0.9

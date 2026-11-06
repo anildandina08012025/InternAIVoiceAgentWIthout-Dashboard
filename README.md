@@ -1,24 +1,33 @@
-# EasyEducation AI Voice Agent — Priya
-### Built with LiveKit (Self-Hosted) + VoBiz SIP + Sarvam AI + Groq + Google Sheets
+# Aivoro Hospital AI Assistant — Priya
 
-Priya is an AI voice sales agent for Easy Education. She answers inbound calls, makes outbound calls, speaks in 4 Indian languages, captures leads, and logs everything to Google Sheets — all automatically.
+## S-R-M Travels outbound feedback calls
+
+Outbound calls with no `call_mode` and no `appointment_at` use Priya as the S-R-M Elite Travels AI receptionist. She asks about the bus journey and an honest rating, politely invites a five-star rating in the app when appropriate, and listens to complaints. Existing appointment calls can use `call_mode: "appointment-reminder"`; an `appointment_at` also selects the appointment flow. The inbound agent is unchanged.
+
+Deploy the updated `google_apps_script.js` as the existing Sheets web app and update its deployment. Set `SHEETS_WEBHOOK_URL` and `WEBHOOK_SECRET` in the agent environment, and set the same `WEBHOOK_SECRET` plus `SPREADSHEET_ID` in Apps Script properties. Restart the outbound worker and webhook. The assistant saves feedback to the automatically created **SRM Feedback** tab and confirms the save only after the spreadsheet responds successfully. The team must review that tab; this does not send a separate notification or automatically forward complaints. If saving fails, the assistant is instructed to say so.
+
+Add a customer's phone number to the existing **Outbound** tab, or send `call_mode: "srm-travels-feedback"` to `/trigger-call`. Travel calls start in Kannada and support Kannada, Telugu, and English. A successful dispatch does not prove the call was answered. Test the complete flow with an authorized number before use.
+
+To use Google Gemini TTS for Kannada, set `GOOGLE_TTS_API_KEY` and `KANNADA_TTS_PROVIDER=google` in `.env`, then restart the outbound worker. `GOOGLE_GEMINI_TTS_VOICE` defaults to `Kore`; Telugu and English continue to use Sarvam. If no API key is present, the Google Cloud TTS integration instead uses service-account credentials from `GOOGLE_TTS_CREDENTIALS_JSON`, Application Default Credentials, or `GOOGLE_APPLICATION_CREDENTIALS`. With `KANNADA_TTS_PROVIDER=sarvam`, Kannada also uses Sarvam.
+
+Priya answers hospital service enquiries, collects appointment requests, and makes reminder calls in English, Hindi, Telugu, and Kannada.
+
+Both voice agents and inbound lead extraction use `openai/gpt-oss-120b` through OpenRouter, restricted to Cerebras. Add `OPENROUTER_API_KEY` to `.env` and restart both workers. The key must be from OpenRouter; an OpenAI API key will not work. If Cerebras is unavailable, requests fail instead of falling back to another provider.
+
+## Hospital appointment workflow
+
+- Deploy the updated `google_apps_script.js` as your Google Sheets web app and run `setupSheets()` to create the **Appointments** tab. Update the existing web app deployment so the agents use this version.
+- Set the same `WEBHOOK_SECRET` in the Python `.env` and Apps Script properties, alongside `SHEETS_WEBHOOK_URL`, `SPREADSHEET_ID`, and `EC2_WEBHOOK_URL`.
+- The inbound agent collects patient name, phone, department, preferred date/time, and reminder consent. After patient confirmation it saves a **Pending** request and returns a reference. Reception must verify the slot and change **Status** to **Confirmed**; this integration does not check a doctor calendar.
+- Add an Apps Script time trigger for `checkReminders`, every minute. It dispatches calls one hour before confirmed appointments with reminder consent. Reception can change **Reminder At**. Set spreadsheet timezone to Asia/Kolkata.
+- **Dispatched** means the calling job was accepted, not that the patient answered. Review failed or uncertain jobs before clearing **Reminder Status** to retry. Cancelled appointments and appointments without consent are skipped.
+- Restart both Python workers and the webhook after updating files. Existing worker names and filenames are retained for compatibility.
+
+Aivoro Hospital is described as providing comprehensive treatment. Actual department lists, doctors, fees, address, and opening hours must be supplied by the hospital; the assistant asks staff to confirm unknown details. No live calls or remote deployments are performed by this local change.
 
 ---
 
-## What Priya Can Do
-
-| Feature | Description |
-|---|---|
-| **Inbound Calls** | Answers calls on your VoBiz number automatically |
-| **Outbound Calls** | Calls numbers added to Google Sheet within 1-2 mins |
-| **4 Languages** | English, Hindi, Telugu, Kannada — auto-detects from caller's speech |
-| **Language Lock** | Stays in the detected language throughout the call |
-| **Lead Capture** | Extracts caller Name, Grade, Interest using AI at call end |
-| **Topic-Based Calls** | Specify a topic + language in the sheet — Priya talks about it |
-| **Google Sheets CRM** | Logs every call to Outbound / Inbound / Leads tabs |
-| **Indian Timezone** | All logs in IST |
-
----
+## Existing infrastructure setup reference
 
 ## Architecture
 
@@ -30,7 +39,7 @@ Caller dials +918065481599
       → LiveKit Server (localhost:7880)
         → agent_inbound_easyedu.py answers
           → Sarvam STT (hears caller)
-          → Groq LLM (thinks and replies)
+          → OpenRouter / Cerebras LLM (thinks and replies)
           → Sarvam TTS Priya voice (speaks)
           → At call end → logs to Google Sheets (Inbound + Leads)
 ```
@@ -56,7 +65,7 @@ Google Sheet → Outbound tab → add Phone + Topic + Language
 | **SIP Bridge** | livekit-sip (Docker) | Connects SIP calls to LiveKit |
 | **STT** | Sarvam saarika:v2.5 | Indian language speech recognition |
 | **TTS** | Sarvam bulbul:v3 (Priya voice) | Natural Indian language speech |
-| **LLM** | Groq llama-3.3-70b-versatile | Fast AI brain (~200ms response) |
+| **LLM** | OpenRouter / Cerebras openai/gpt-oss-120b | AI conversation and lead extraction |
 | **VAD** | Silero | Detects when caller is speaking |
 | **Webhook Server** | Flask (port 8090) | Receives triggers from Google Sheets |
 | **CRM** | Google Sheets + Apps Script | Logs calls, leads, triggers outbound |
@@ -93,7 +102,7 @@ livekit-project/ (on EC2) / Vobiz+Livekit(selfhost)/ (local)
 | **VoBiz** | Phone numbers + SIP trunking | Paid (per min) |
 | **AWS EC2** | Server to run everything | ~₹1/hr (t2.micro) |
 | **Sarvam AI** | Indian STT + TTS | Free credits available |
-| **Groq** | LLM (AI brain) | Free tier available |
+| **OpenRouter** | LLM access through Cerebras | Usage-based pricing |
 | **LiveKit** | Self-hosted, no cost | Free (EC2 cost only) |
 | **Google Sheets** | CRM for calls + leads | Free |
 
@@ -107,8 +116,8 @@ LIVEKIT_URL=ws://localhost:7880
 LIVEKIT_API_KEY=devkey
 LIVEKIT_API_SECRET=secret
 
-# Groq
-GROQ_API_KEY=your_groq_api_key_here
+# OpenRouter
+OPENROUTER_API_KEY=your_openrouter_api_key_here
 
 # Sarvam AI
 SARVAM_API_KEY=your_sarvam_api_key_here
@@ -314,6 +323,160 @@ sudo docker ps
 
 ---
 
+## LiveKit Cloud + VoBiz Inbound SIP Setup
+
+Use this section when running the agents from a laptop or with LiveKit Cloud, instead of forwarding VoBiz to a self-hosted EC2 SIP server.
+
+### Where to find the LiveKit SIP host
+
+In LiveKit Cloud:
+
+1. Open your LiveKit Cloud project.
+2. Go to **Project settings**.
+3. Open **General**.
+4. Copy the value shown as **SIP URI**.
+
+Example:
+
+```text
+sip:3bdgw8gzp6t.sip.livekit.cloud
+```
+
+For VoBiz, remove the `sip:` prefix. Enter only:
+
+```text
+3bdgw8gzp6t.sip.livekit.cloud
+```
+
+Important: the **Project URL** and **SIP URI** are not the same.
+
+```text
+Project URL: test-hospital-hw9cmyt9.livekit.cloud
+SIP URI:     3bdgw8gzp6t.sip.livekit.cloud
+```
+
+Do not guess the SIP host from `LIVEKIT_URL`. Always copy it from LiveKit Cloud **Project settings -> General -> SIP URI**.
+
+### VoBiz Origination URI
+
+In VoBiz:
+
+1. Go to **SIP Trunk -> Inbound Trunks -> Origination URI**.
+2. Create a URI.
+3. Enter the LiveKit SIP host without `sip:`.
+4. Use **UDP** first.
+
+Recommended first test:
+
+```text
+Name: LiveKitCloud
+URI: 3bdgw8gzp6t.sip.livekit.cloud
+Transport: UDP
+```
+
+If VoBiz shows a host-port warning, click **Save anyway**. LiveKit Cloud SIP URIs can work without manually adding `:5060`.
+
+If the no-port URI fails, test this second:
+
+```text
+Name: LiveKitCloud5060
+URI: 3bdgw8gzp6t.sip.livekit.cloud:5060
+Transport: UDP
+```
+
+Then go to **SIP Trunk -> Inbound Trunks -> Trunks -> Edit inbound trunk** and set **Primary URI** to the working LiveKit URI.
+
+### LiveKit inbound trunk requirements
+
+The LiveKit inbound trunk must match the VoBiz number and allow VoBiz SIP traffic.
+
+For testing, use:
+
+```text
+Phone numbers:
++918065481599
+918065481599
+08065481599
+8065481599
+
+Allowed addresses:
+0.0.0.0/0
+```
+
+The dispatch rule must point to the same inbound trunk and must dispatch the correct agent name:
+
+```text
+Agent name: inbound-assistant
+Room prefix: inbound-
+```
+
+The Python inbound worker must also use the same agent name:
+
+```python
+agent_name="inbound-assistant"
+```
+
+### Issue we faced and final resolution
+
+The inbound call reached VoBiz, but LiveKit did not receive any room/job. VoBiz call logs showed:
+
+```text
+Direction: Inbound
+Status: Not answered
+Bill Sec: 0
+Hangup Cause Code: 4000
+Terminated To: inbound_carrier
+```
+
+The first incorrect VoBiz URI was based on the LiveKit Project URL:
+
+```text
+test-hospital-hw9cmyt9.sip.livekit.cloud
+```
+
+The correct SIP URI was found in LiveKit Cloud settings:
+
+```text
+sip:3bdgw8gzp6t.sip.livekit.cloud
+```
+
+The VoBiz URI should therefore be:
+
+```text
+3bdgw8gzp6t.sip.livekit.cloud
+```
+
+Final working result: inbound calls started working after using the correct LiveKit Cloud SIP URI in VoBiz and changing the first AI greeting to direct TTS with `session.say()` instead of waiting for `session.generate_reply()`. This reduced the initial answer delay enough for PSTN inbound calls.
+
+Final working configuration:
+
+```text
+VoBiz number: +918065481599
+VoBiz inbound trunk: AIHospitalInboun
+VoBiz Primary URI: 3bdgw8gzp6t.sip.livekit.cloud or 3bdgw8gzp6t.sip.livekit.cloud:5060
+Transport: UDP
+LiveKit inbound agent name: inbound-assistant
+Inbound worker file: agent_inbound_easyedu.py
+First greeting method: session.say()
+```
+
+If calls again say "not reachable" or LiveKit does not receive the call, collect these values from VoBiz call logs and send them to VoBiz support:
+
+```text
+Direction: Inbound
+Destination country: India
+Destination number: +918065481599
+Timestamp with timezone
+VoBiz Call ID
+SIP Call ID
+Trunk ID
+Hangup Cause Code
+Terminated To
+```
+
+Ask VoBiz support to confirm the exact SIP INVITE destination and the SIP response received from LiveKit.
+
+---
 ## Common Errors & Fixes
 
 | Error | Cause | Fix |
@@ -322,6 +485,9 @@ sudo docker ps
 | Agent answers but silent | Sarvam mime_type bug | Re-apply the `sed` patch in Step 4 |
 | Outbound call not triggered | EC2 IP changed | Update Apps Script `EC2_WEBHOOK_URL` |
 | SIP trunk not found (404) | Redis wiped on docker restart | Run `setup_dispatch.py` again |
+| Inbound call says not reachable | VoBiz URI is wrong or not reaching LiveKit SIP | Use LiveKit Cloud **SIP URI**, not Project URL; remove `sip:` in VoBiz |
+| Inbound call reaches VoBiz but LiveKit gets no room/job | VoBiz-to-LiveKit SIP forwarding issue | Check VoBiz Primary URI, UDP transport, LiveKit allowed addresses, and dispatch rule |
+| Inbound call reaches LiveKit but caller hears not reachable or disconnects fast | First greeting is too slow | Use direct `session.say()` for the opening greeting instead of `session.generate_reply()` |
 | `python: command not found` | Use `python3` on Ubuntu | Replace `python` with `python3` |
 | `docker-compose: permission denied` | Need sudo | Use `sudo docker-compose` |
 | Language shows English always | Event name wrong | Already fixed: uses `user_input_transcribed` |
@@ -342,4 +508,7 @@ sudo docker ps
 
 ---
 
-*Last updated: April 2026 | Project: EasyEducation AI Voice Agent | Persona: Priya*
+*Last updated: August 2026 | Project: AI Hospital Voice Agent | Persona: Priya*
+
+
+

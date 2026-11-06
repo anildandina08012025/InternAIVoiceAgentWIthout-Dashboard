@@ -27,11 +27,11 @@ async def setup():
         api.CreateSIPInboundTrunkRequest(
             trunk=api.SIPInboundTrunkInfo(
                 name="VoBiz Inbound",
-                numbers=["+918065481599"],
+                numbers=["+918065481599", "918065481599", "08065481599", "8065481599"],
             )
         )
     )
-    print(f"✅ Trunk created: {trunk.sip_trunk_id}")
+    print(f"Trunk created: {trunk.sip_trunk_id}")
 
     # Step 2: Create dispatch rule using the new trunk ID
     rule = await lk.sip.create_sip_dispatch_rule(
@@ -52,7 +52,8 @@ async def setup():
             ),
         )
     )
-    print(f"✅ Dispatch rule created: {rule.sip_dispatch_rule_id}")
+    print(f"Dispatch rule created: {rule.sip_dispatch_rule_id}")
     await lk.aclose()
 
 asyncio.run(setup())
+

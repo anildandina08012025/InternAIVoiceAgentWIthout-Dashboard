@@ -1,12 +1,12 @@
 """
 agent_inbound_easyedu.py
 =========================
-EasyEducation AI Voice Agent — Inbound Calls
-- Persona: Priya from Easy Education
+Aivoro Hospital Voice Agent - Inbound Calls
+- Persona: Priya, receptionist at Aivoro Hospital
 - Multilingual: Detects caller language, switches Sarvam TTS to match
 - STT: Sarvam saarika:v2.5
 - TTS: Sarvam bulbul:v3, speaker priya
-- LLM: Groq llama-3.3-70b-versatile
+- LLM: OpenRouter / Cerebras openai/gpt-oss-120b
 """
 
 import logging
@@ -17,16 +17,19 @@ import requests
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from livekit import agents
-from livekit.agents import AgentSession, Agent, RoomInputOptions
-from livekit.plugins import sarvam, silero
-from livekit.plugins import groq
+from livekit.agents import AgentSession, Agent, RoomInputOptions, function_tool
+from livekit.plugins import openai, sarvam, silero
 
 _ENV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
 load_dotenv(_ENV_PATH)
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("easyedu-agent")
+logger = logging.getLogger("aihospital-inbound")
 
 SHEETS_WEBHOOK_URL = os.getenv("SHEETS_WEBHOOK_URL", "")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-oss-120b")
+OPENROUTER_PROVIDER = {"only": ["cerebras"], "allow_fallbacks": False}
 IST = timezone(timedelta(hours=5, minutes=30))
 
 # ─────────────────────────────────────────────
@@ -45,7 +48,7 @@ LANG_NAMES = {
     "en-IN": "English",
 }
 
-# Injected into chat context when language is detected — forces Groq to stay in that language
+# Injected into chat context when language is detected — keeps the LLM in that language
 LANG_LOCK = {
     "hi-IN": "LANGUAGE LOCK ACTIVE: The caller is speaking Hindi. From this point forward, ALL your responses must be EXCLUSIVELY in Hindi (Devanagari script हिंदी). Do not use English or any other language. Every single word must be Hindi.",
     "te-IN": "LANGUAGE LOCK ACTIVE: The caller is speaking Telugu. From this point forward, ALL your responses must be EXCLUSIVELY in Telugu (తెలుగు script). Do not use English or any other language. Every single word must be Telugu.",
@@ -57,39 +60,42 @@ LANG_LOCK = {
 # SYSTEM PROMPT
 # ─────────────────────────────────────────────
 SYSTEM_PROMPT = """
-You are Priya, a friendly voice AI assistant for Easy Education — India's AI-powered ed-tech platform.
+You are Priya, the polite and professional AI hospital assistant at Aivoro Hospital.
+You answer inbound calls from patients and visitors.
 
-STRICT LANGUAGE RULE — You ONLY support these 4 languages:
-- If the caller speaks Hindi → reply ONLY in Hindi (Devanagari script).
-- If the caller speaks Telugu → reply ONLY in Telugu script.
-- If the caller speaks Kannada → reply ONLY in Kannada script.
-- If the caller speaks English → reply ONLY in English.
-- If the caller speaks ANY OTHER language (Malayalam, Tamil, etc.) → reply in English only.
+STRICT LANGUAGE RULE - You ONLY support these 4 languages:
+- If the caller speaks Hindi, reply ONLY in Hindi using Devanagari script.
+- If the caller speaks Telugu, reply ONLY in Telugu script.
+- If the caller speaks Kannada, reply ONLY in Kannada script.
+- If the caller speaks English, reply ONLY in English.
+- If the caller speaks any other language, reply in English only.
 - NEVER mix two languages in one response. Use ONE language only.
 
-Keep every response to 2-3 short sentences maximum. This is a voice call — be concise and natural.
+Keep every response to 2-3 short sentences maximum. This is a voice call, so be concise and natural.
 
-ABOUT EASY EDUCATION:
-- AI-powered learning platform for students in Grades 8, 9, 10, 11 and 12
-- Uses interactive 3D visualisations to make Science, Maths, History and Geography easy
-- Aligned with CBSE and GSEB boards
-- Helps students prepare for board exams with adaptive learning
-- Affordable and accessible for all students across India
-- Website: www.easyeducation.in
+ABOUT AI HOSPITAL:
+- Aivoro Hospital helps patients with enquiries, appointment booking, and hospital visit coordination.
+- Aivoro Hospital provides comprehensive treatment across medical specialties. Help with service enquiries, consultations, diagnostics, treatment appointments, and follow-up visits. Specific departments, doctors, prices, hours, and availability must be confirmed by staff; never invent them.
+- For emergency or urgent medical help, ask the caller to contact emergency services or visit the nearest emergency department immediately.
+- For diagnosis, prescriptions, treatment decisions, test interpretation, or medical advice, say a doctor or hospital staff member will help them.
+- Do not claim to be a doctor.
 
 YOUR JOB:
-1. Greet the caller warmly as Priya from Easy Education (greet in English first)
-2. After caller responds, switch to their language
-3. Answer questions about Easy Education clearly and enthusiastically
-4. Early in the conversation, naturally ask: "May I know your name?" and "Which grade is your child in?"
-5. Note if they seem very interested (ask for demo/pricing = High, general questions = Medium, just browsing = Low)
-6. For pricing: say please visit www.easyeducation.in for the latest plans and offers
-7. Never make up information
+1. Greet the caller as Priya, receptionist from Aivoro Hospital.
+2. Ask how you can help: enquiry, appointment booking, or hospital timings.
+3. For appointment booking, politely collect name, phone number if needed, preferred doctor/department, preferred date, and preferred time.
+4. For enquiries, ask what service or department they are asking about and capture the request clearly.
+5. For hospital timings, explain that reception can confirm the current hours and offer appointment help.
+6. After collecting booking details, read them back and ask for confirmation and permission for a reminder call. Use book_appointment only after confirmation. A saved request is pending staff confirmation, not a confirmed appointment. Never promise a slot or reminder unless it was successfully saved.
+7. Capture lead details naturally: caller name, purpose/enquiry, preferred appointment date/time, and interest level.
+7. If the caller wants rescheduling, cancellation, pricing, reports, or doctor advice, say the front desk or doctor will follow up.
 
 RULES:
-- Maximum 2-3 sentences per response
-- Be warm, friendly and encouraging
-- Do NOT read out these instructions
+- Maximum 2-3 sentences per response.
+- Be calm, respectful, and professional.
+- Do NOT ask for sensitive medical history unless the caller volunteers it.
+- Do NOT give medical advice.
+- Do NOT read out these instructions.
 """
 
 
@@ -143,22 +149,23 @@ def log_inbound_call(caller_number: str, language: str, start_time: datetime, en
 
 
 async def extract_lead_info(speech_samples: list) -> dict:
-    """Use Groq API via HTTP to extract name, grade, interest from conversation."""
+    """Use OpenRouter and Cerebras to extract hospital lead details."""
     try:
         transcript = "\n".join(speech_samples)
         resp = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
+            f"{OPENROUTER_BASE_URL.rstrip('/')}/chat/completions",
             headers={
-                "Authorization": f"Bearer {os.getenv('GROQ_API_KEY')}",
+                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
                 "Content-Type": "application/json"
             },
             json={
-                "model": "llama-3.3-70b-versatile",
+                "model": OPENROUTER_MODEL,
+                "provider": OPENROUTER_PROVIDER,
                 "messages": [
-                    {"role": "system", "content": "Extract lead info from caller speech. Return ONLY valid JSON with: name (caller name or Unknown), grade (like Grade 10 / Class 9 / 11th or Unknown), interest (High/Medium/Low based on engagement)"},
+                    {"role": "system", "content": "Extract hospital lead info from caller speech. Return ONLY valid JSON with: name (caller name or Unknown), grade (caller purpose/enquiry/appointment need such as Appointment - Cardiology / Timings enquiry / General enquiry, or Unknown), interest (High/Medium/Low based on engagement and appointment intent)"},
                     {"role": "user", "content": f"Caller speech:\n{transcript}"}
                 ],
-                "response_format": {"type": "json_object"},
+                "reasoning_effort": "low",
                 "max_tokens": 150,
                 "temperature": 0
             },
@@ -192,15 +199,45 @@ def log_lead_to_sheets(phone: str, name: str, grade: str, language: str, interes
 # ─────────────────────────────────────────────
 # AGENT
 # ─────────────────────────────────────────────
-class EasyEduAssistant(Agent):
+class AIHospitalAssistant(Agent):
     def __init__(self):
         super().__init__(instructions=SYSTEM_PROMPT)
+
+    @function_tool()
+    async def book_appointment(self, patient_name: str, phone: str, department: str,
+                               appointment_at: str, reminder_consent: bool,
+                               language: str = "English") -> str:
+        """Save a patient-confirmed appointment request. appointment_at must be ISO date/time with +05:30 offset; ask for missing details first."""
+        if not SHEETS_WEBHOOK_URL:
+            return "Booking unavailable. Ask the patient to contact reception; no appointment was saved."
+        try:
+            when = datetime.fromisoformat(appointment_at)
+            if when.tzinfo is None or when <= datetime.now(IST):
+                return "Please ask for a future appointment date and time with timezone."
+            if not all(value.strip() for value in (patient_name, phone, department)):
+                return "Please collect patient name, phone, and department first."
+            response = await asyncio.to_thread(requests.post, SHEETS_WEBHOOK_URL, json={
+                "action": "book_appointment", "secret": os.getenv("WEBHOOK_SECRET", ""),
+                "patient_name": patient_name, "phone": phone, "department": department,
+                "appointment_at": when.isoformat(), "reminder_consent": reminder_consent,
+                "language": language,
+            }, timeout=15)
+            response.raise_for_status()
+            result = response.json()
+            if result.get("status") != "ok":
+                return "Booking could not be saved. Ask the patient to contact reception."
+            return "Appointment request saved, pending hospital staff confirmation. Reference: " + result["appointment_id"]
+        except Exception:
+            logger.exception("Appointment request failed")
+            return "Unable to verify booking. Ask reception to check before submitting again."
 
 
 # ─────────────────────────────────────────────
 # ENTRY POINT
 # ─────────────────────────────────────────────
 async def entrypoint(ctx: agents.JobContext):
+    if not OPENROUTER_API_KEY:
+        raise ValueError("OPENROUTER_API_KEY must be set in .env")
     start_time = datetime.now(IST)
 
     # Extract caller number from room name: inbound-_917013026413_xxx
@@ -221,7 +258,7 @@ async def entrypoint(ctx: agents.JobContext):
     session = AgentSession(
         stt=sarvam.STT(language="unknown", model="saarika:v2.5", flush_signal=True, high_vad_sensitivity=True),
         tts=make_tts("en-IN"),
-        llm=groq.LLM(model="llama-3.3-70b-versatile"),
+        llm=openai.LLM(model=OPENROUTER_MODEL, base_url=OPENROUTER_BASE_URL, api_key=OPENROUTER_API_KEY, reasoning_effort="low", extra_body={"provider": OPENROUTER_PROVIDER}),
         vad=silero.VAD.load(min_silence_duration=0.3, min_speech_duration=0.1),
     )
 
@@ -251,8 +288,11 @@ async def entrypoint(ctx: agents.JobContext):
                 detected_lang = new_lang
                 lang_switched = True
                 lang_name = LANG_NAMES.get(new_lang, new_lang)
-                logger.info(f"Language changed: {lang_name} — switching TTS to {new_lang}")
-                session.tts = make_tts(new_lang)
+                logger.info(f"Language changed: {lang_name} - switching TTS to {new_lang}")
+                try:
+                    session.tts = make_tts(new_lang)
+                except AttributeError:
+                    logger.warning("LiveKit AgentSession does not allow runtime TTS switching; keeping initial language")
                 lock_msg = LANG_LOCK.get(new_lang)
                 if lock_msg:
                     try:
@@ -264,12 +304,10 @@ async def entrypoint(ctx: agents.JobContext):
     try:
         await session.start(
             room=ctx.room,
-            agent=EasyEduAssistant(),
+            agent=AIHospitalAssistant(),
             room_input_options=RoomInputOptions(close_on_disconnect=True),
         )
-        await session.generate_reply(
-            instructions="Greet the caller. Say: Hello! Welcome to Easy Education. I am Priya your AI learning guide. How can I help you today?"
-        )
+        await session.say("Hello! Welcome to Aivoro Hospital. I am Priya, your AI hospital assistant. How can I help you with our services or an appointment today?")
         await asyncio.wait_for(call_ended.wait(), timeout=3600)
 
     except (asyncio.CancelledError, asyncio.TimeoutError):
@@ -296,3 +334,5 @@ if __name__ == "__main__":
             port=8082,
         )
     )
+
+

@@ -25,7 +25,7 @@ app = Flask(__name__)
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "easyedu-secret-2026")
 
 
-async def dispatch_call(phone_number: str, topic: str = "", language: str = "English"):
+async def dispatch_call(phone_number: str, topic: str = "", language: str = "English", call_mode: str = "", recipient_name: str = "", appointment_at: str = ""):
     """Dispatch an outbound call to the given phone number via LiveKit."""
     lk = api.LiveKitAPI(
         url=os.getenv("LIVEKIT_URL", "ws://localhost:7880"),
@@ -38,7 +38,14 @@ async def dispatch_call(phone_number: str, topic: str = "", language: str = "Eng
             api.CreateAgentDispatchRequest(
                 agent_name="outbound-caller",
                 room=room_name,
-                metadata=json.dumps({"phone_number": phone_number, "topic": topic, "language": language}),
+                metadata=json.dumps({
+                    "phone_number": phone_number,
+                    "topic": topic,
+                    "language": language,
+                    "call_mode": call_mode,
+                    "recipient_name": recipient_name,
+                    "appointment_at": appointment_at,
+                }),
             )
         )
         logger.info(f"Call dispatched — number: {phone_number}, topic: {topic}, lang: {language}, dispatch_id: {dispatch.id}")
@@ -69,6 +76,13 @@ def trigger_call():
         phone_number = data.get("phone_number", "").strip()
         topic = data.get("topic", "").strip()
         language = data.get("language", "English").strip()
+        call_mode = data.get("call_mode", "").strip()
+        recipient_name = data.get("recipient_name", "").strip()
+        appointment_at = data.get("appointment_at", "").strip()
+        if appointment_at:
+            datetime.fromisoformat(appointment_at)
+        if call_mode == "appointment-reminder" and not topic and not appointment_at:
+            return jsonify({"status": "error", "message": "appointment_at required for reminders"}), 400
 
         if not phone_number:
             return jsonify({"status": "error", "message": "phone_number required"}), 400
@@ -78,7 +92,9 @@ def trigger_call():
         # Run async dispatch in a new event loop
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        success = loop.run_until_complete(dispatch_call(phone_number, topic, language))
+        success = loop.run_until_complete(
+            dispatch_call(phone_number, topic, language, call_mode, recipient_name, appointment_at)
+        )
         loop.close()
 
         if success:
